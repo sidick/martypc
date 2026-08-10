@@ -17,6 +17,5 @@ crate-type = ["lib"]
 indexmap.workspace = true
 rustc-hash.workspace = true
 serde.workspace = true
-web-time.workspace = true
 strum.workspace = true
 strum_macros.workspace = true

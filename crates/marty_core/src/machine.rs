@@ -40,8 +40,9 @@ use std::{
     fs::File,
     io::{BufWriter, Write},
     path::PathBuf,
-    sync::{Arc, RwLock},
 };
+#[cfg(feature = "disk_images")]
+use std::sync::{Arc, RwLock};
 
 #[cfg(feature = "sound")]
 use crate::sound::{SoundOutput, SoundOutputConfig, SoundSourceDescriptor};
@@ -68,9 +69,7 @@ use crate::{
     devices::{
         cartridge_slots::CartridgeSlot,
         dma::DMAControllerStringState,
-        fdc::{controller::FloppyController, FdcDebugState},
-        floppy_drive::FloppyImageState,
-        hdc::{xebec::HardDiskController, xtide::XtIdeController},
+        hdc::xebec::HardDiskController,
         keyboard_common::KeyboardModifiers,
         mouse::Mouse,
         pic::PicStringState,
@@ -84,8 +83,17 @@ use crate::{
     tracelogger::TraceLogger,
 };
 
-use crate::devices::{fantasy_ems::FantasyEmsCard, hdc::jr_ide::JrIdeController};
+#[cfg(feature = "disk_images")]
+use crate::devices::{
+    fantasy_ems::FantasyEmsCard,
+    fdc::{controller::FloppyController, FdcDebugState},
+    floppy_drive::FloppyImageState,
+    hdc::{jr_ide::JrIdeController, xtide::XtIdeController},
+};
+#[cfg(not(feature = "disk_images"))]
+use crate::devices::fantasy_ems::FantasyEmsCard;
 use anyhow::{anyhow, Error};
+#[cfg(feature = "disk_images")]
 use fluxfox::DiskImage;
 use log;
 pub use marty_common::types::rom::{MachineCheckpoint, MachinePatch, MachineRomEntry, MachineRomManifest};
@@ -941,6 +949,7 @@ impl Machine {
         );
     }
 
+    #[cfg(feature = "disk_images")]
     pub fn fdc(&mut self) -> &mut Option<Box<FloppyController>> {
         self.cpu.bus_mut().fdc_mut()
     }
@@ -949,10 +958,12 @@ impl Machine {
         self.cpu.bus_mut().hdc_mut()
     }
 
+    #[cfg(feature = "disk_images")]
     pub fn xtide_mut(&mut self) -> &mut Option<Box<XtIdeController>> {
         self.cpu.bus_mut().xtide_mut()
     }
 
+    #[cfg(feature = "disk_images")]
     pub fn jride_mut(&mut self) -> &mut Option<Box<JrIdeController>> {
         self.cpu.bus_mut().jride_mut()
     }
@@ -1041,14 +1052,17 @@ impl Machine {
         self.cpu.bus_mut().dma_mut().as_mut().unwrap().get_string_state()
     }
 
+    #[cfg(feature = "disk_images")]
     pub fn fdc_state(&mut self) -> Option<FdcDebugState> {
         self.cpu.bus_mut().fdc_mut().as_mut().map(|fdc| fdc.get_debug_state())
     }
 
+    #[cfg(feature = "disk_images")]
     pub fn floppy_image_state(&mut self) -> Option<Vec<Option<FloppyImageState>>> {
         self.cpu.bus_mut().fdc_mut().as_mut().map(|fdc| fdc.get_image_state())
     }
 
+    #[cfg(feature = "disk_images")]
     pub fn floppy_image(&mut self, drive_idx: usize) -> (Option<Arc<RwLock<DiskImage>>>, u64) {
         if let Some(fdc) = self.cpu.bus_mut().fdc_mut().as_mut() {
             fdc.get_image(drive_idx)

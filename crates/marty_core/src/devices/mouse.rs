@@ -51,8 +51,6 @@ const MOUSE_UPDATE_RBUTTON: u8 = 0b0001_0000;
 const MOUSE_UPDATE_HO_BITS: u8 = 0b1100_0000;
 const MOUSE_UPDATE_LO_BITS: u8 = 0b0011_1111;
 
-use web_time::Instant;
-
 #[allow(dead_code)]
 pub struct Mouse {
     speed: f32,
@@ -61,7 +59,6 @@ pub struct Mouse {
     rts_low_timer: f64,
     dtr: bool,
     port: usize,
-    last_update: Instant,
     poll_rate: f32,
 }
 
@@ -78,7 +75,6 @@ impl Mouse {
             rts_low_timer: 0.0,
             dtr: false,
             port,
-            last_update: Instant::now(),
             poll_rate: poll_rate.unwrap_or(DEFAULT_POLL_RATE),
         }
     }

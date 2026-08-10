@@ -57,9 +57,8 @@ use crate::{
         cga::CGACard,
         dma::*,
         fantasy_ems::FantasyEmsCard,
-        fdc::FloppyController,
         game_port::GamePort,
-        hdc::{xebec::HardDiskController, xtide::XtIdeController},
+        hdc::xebec::HardDiskController,
         keyboard_common::*,
         lotech_ems::LotechEmsCard,
         lpt_card::ParallelController,
@@ -74,7 +73,7 @@ use crate::{
     },
     machine::KeybufferEntry,
     machine_config::{normalize_conventional_memory, MachineConfiguration, MachineDescriptor},
-    machine_types::{EmsType, FdcType, HardDiskControllerType, MachineType, SerialControllerType, SerialMouseType},
+    machine_types::{EmsType, HardDiskControllerType, MachineType, SerialControllerType, SerialMouseType},
     syntax_token::{SyntaxFormatType, SyntaxToken},
     tracelogger::TraceLogger,
 };
@@ -89,10 +88,14 @@ use crate::devices::adlib::AdLibCard;
 use crate::devices::ega::EGACard;
 #[cfg(feature = "vga")]
 use crate::devices::vga::VGACard;
+#[cfg(feature = "disk_images")]
+use crate::devices::{fdc::FloppyController, hdc::jr_ide::JrIdeController, hdc::xtide::XtIdeController};
+#[cfg(feature = "disk_images")]
+use crate::machine_types::FdcType;
 
 use crate::{
     bus::dispatch::MemoryDispatch,
-    devices::{conventional_memory::ConventionalMemory, hdc::jr_ide::JrIdeController, sn76489::Sn76489},
+    devices::{conventional_memory::ConventionalMemory, sn76489::Sn76489},
 };
 #[cfg(feature = "sound")]
 use crate::{
@@ -314,6 +317,48 @@ pub enum IoDeviceType {
     Video(VideoCardId),
     Sound,
     Sn76489,
+    /// A single caller-supplied device (io + mmio) that isn't one of the
+    /// closed set of video card types above. Unlike `IoDeviceDispatch::
+    /// Dynamic` (defined but never wired into dispatch), this variant is
+    /// a real extension point: see `BusInterface::install_custom_video_device`.
+    CustomVideo,
+    /// A second, independent `CustomVideoDevice` slot -- see
+    /// `BusInterface::install_custom_video_device_2`. Real hardware can
+    /// have more than one video card resident at once (e.g. CGA + MDA
+    /// for dual-monitor setups), and their port/mmio ranges never
+    /// overlap, so a second slot is simpler than generalizing to N.
+    CustomVideo2,
+    /// A single caller-supplied I/O-only device (no video, no mmio) --
+    /// see `BusInterface::install_custom_io_device`. Separate from
+    /// `CustomVideo` because most such devices (e.g. a POST diagnostic
+    /// port) have no video RAM and no business implementing
+    /// `MemoryMappedDevice` at all.
+    CustomIo,
+}
+
+/// A caller-supplied device combining [`IoDevice`] and [`MemoryMappedDevice`],
+/// installed via [`BusInterface::install_custom_video_device`]. Exists because
+/// `BusInterface`'s own device dispatch is a closed match against
+/// `IoDeviceType`/`MmioDeviceType` and the fixed `VideoCardDispatch` enum --
+/// there is no other way to plug in a video-class device `marty_core` doesn't
+/// already know about.
+pub trait CustomVideoDevice: IoDevice + MemoryMappedDevice {
+    /// Direct access to this device's video RAM, so the embedding host can
+    /// alias it into memory the CPU doesn't reach through `mmio_read_u8`/
+    /// `mmio_write_u8` (e.g. dual-ported RAM shared with another bus
+    /// entirely). Not a blanket impl: every device must say explicitly
+    /// where its backing bytes live.
+    fn vram_mut(&mut self) -> &mut [u8];
+}
+
+/// A caller-supplied pure-memory device -- like [`CustomVideoDevice`] but
+/// without the `IoDevice` requirement, for devices with no I/O ports at
+/// all (e.g. dual-ported RAM with no controller registers on either
+/// side).
+pub trait CustomMemoryDevice: MemoryMappedDevice {
+    /// Direct access to this device's backing bytes, for the same reason
+    /// as [`CustomVideoDevice::vram_mut`].
+    fn ram_mut(&mut self) -> &mut [u8];
 }
 
 pub enum IoDeviceDispatch {
@@ -423,6 +468,8 @@ pub enum MmioDeviceType {
     MemoryExpansion(usize),
     Cart,
     JrIde,
+    CustomVideo,
+    CustomMemory,
 }
 
 // Main bus struct.
@@ -468,9 +515,12 @@ pub struct BusInterface {
     pic2: Option<Pic>,
     serial: Option<SerialPortController>,
     parallel: Option<ParallelController>,
+    #[cfg(feature = "disk_images")]
     fdc: Option<Box<FloppyController>>,
     hdc: Option<Box<HardDiskController>>,
+    #[cfg(feature = "disk_images")]
     xtide: Option<Box<XtIdeController>>,
+    #[cfg(feature = "disk_images")]
     jride: Option<Box<JrIdeController>>,
     mouse: Option<Mouse>,
     ems: Option<LotechEmsCard>,
@@ -481,6 +531,9 @@ pub struct BusInterface {
     adlib: Option<AdLibCard>,
     sound_source: Option<DSoundSource>,
     sn76489: Option<Sn76489>,
+    custom_video: Option<Box<dyn CustomVideoDevice>>,
+    custom_io: Option<Box<dyn IoDevice>>,
+    custom_memory: Option<Box<dyn CustomMemoryDevice>>,
 
     videocards:    MartyHashMap<VideoCardId, VideoCardDispatch>,
     videocard_ids: Vec<VideoCardId>,
@@ -557,9 +610,12 @@ impl Default for BusInterface {
             pic2: None,
             serial: None,
             parallel: None,
+            #[cfg(feature = "disk_images")]
             fdc: None,
             hdc: None,
+            #[cfg(feature = "disk_images")]
             xtide: None,
+            #[cfg(feature = "disk_images")]
             jride: None,
             mouse: None,
             ems: None,
@@ -570,6 +626,9 @@ impl Default for BusInterface {
             adlib: None,
             sound_source: None,
             sn76489: None,
+            custom_video: None,
+            custom_io: None,
+            custom_memory: None,
             videocards: MartyHashMap::default(),
             videocard_ids: Vec::new(),
 
@@ -700,6 +759,64 @@ impl BusInterface {
 
     pub fn size(&self) -> usize {
         self.memory.len()
+    }
+
+    /// Install the single caller-supplied [`CustomVideoDevice`] (see that
+    /// trait's docs for why this exists). Only one slot: a real PC has one
+    /// active display adapter at a time, and nothing here needs more.
+    pub fn install_custom_video_device(&mut self, device: Box<dyn CustomVideoDevice>) {
+        add_io_device!(self, device, IoDeviceType::CustomVideo);
+        add_mmio_device!(self, device, MmioDeviceType::CustomVideo);
+        self.custom_video = Some(device);
+    }
+
+    /// The installed [`CustomVideoDevice`], if any -- for host-side access
+    /// that doesn't go through the CPU (e.g. [`CustomVideoDevice::vram_mut`]
+    /// aliasing into another bus entirely).
+    pub fn custom_video_mut(&mut self) -> Option<&mut dyn CustomVideoDevice> {
+        match self.custom_video {
+            Some(ref mut device) => Some(&mut **device),
+            None => None,
+        }
+    }
+
+    /// Install the single caller-supplied I/O-only device (see
+    /// `IoDeviceType::CustomIo`'s docs for why this is separate from
+    /// [`BusInterface::install_custom_video_device`]).
+    pub fn install_custom_io_device(&mut self, device: Box<dyn IoDevice>) {
+        add_io_device!(self, device, IoDeviceType::CustomIo);
+        self.custom_io = Some(device);
+    }
+
+    /// Install the single caller-supplied [`CustomMemoryDevice`].
+    pub fn install_custom_memory_device(&mut self, device: Box<dyn CustomMemoryDevice>) {
+        add_mmio_device!(self, device, MmioDeviceType::CustomMemory);
+        self.custom_memory = Some(device);
+    }
+
+    /// The installed [`CustomMemoryDevice`], if any -- see
+    /// [`BusInterface::custom_video_mut`] for why this exists.
+    pub fn custom_memory_mut(&mut self) -> Option<&mut dyn CustomMemoryDevice> {
+        match self.custom_memory {
+            Some(ref mut device) => Some(&mut **device),
+            None => None,
+        }
+    }
+
+    /// Both installed custom devices' backing bytes at once, disjointly
+    /// borrowed from the same `&mut self` in one function body -- calling
+    /// `custom_video_mut()` and `custom_memory_mut()` separately and
+    /// holding both results doesn't borrow-check (each call opaquely
+    /// borrows all of `self` as far as the caller can see, even though
+    /// the two fields don't overlap). For a host that needs to alias
+    /// several dual-ported banks into another bus at once (e.g.
+    /// `crate::machine::Machine::external_banks_mut` in the embedding
+    /// project).
+    pub fn custom_video_and_memory_mut(&mut self) -> (Option<&mut [u8]>, Option<&mut [u8]>) {
+        (
+            self.custom_video.as_deref_mut().map(CustomVideoDevice::vram_mut),
+            self.custom_memory.as_deref_mut().map(CustomMemoryDevice::ram_mut),
+        )
     }
 
     /// Register a memory-mapped device.
@@ -1074,6 +1191,7 @@ impl BusInterface {
         }
 
         // Create FDC if specified.
+        #[cfg(feature = "disk_images")]
         if let Some(fdc_config) = &machine_config.fdc {
             //let floppy_ct = fdc_config.drive.len();
             let fdc_type = fdc_config.fdc_type;
@@ -1099,17 +1217,26 @@ impl BusInterface {
                     add_io_device!(self, hdc, IoDeviceType::HardDiskController);
                     self.hdc = Some(Box::new(hdc));
                 }
+                #[cfg(feature = "disk_images")]
                 HardDiskControllerType::XtIde => {
                     let xtide = XtIdeController::new(None, 2);
                     add_io_device!(self, xtide, IoDeviceType::HardDiskController);
                     self.xtide = Some(Box::new(xtide));
                 }
+                #[cfg(feature = "disk_images")]
                 HardDiskControllerType::JrIde => {
                     let jride = JrIdeController::new(None, None, 2);
                     add_io_device!(self, jride, IoDeviceType::HardDiskController);
                     add_mmio_device!(self, jride, MmioDeviceType::JrIde);
                     self.jride = Some(Box::new(jride));
                 }
+                // Match stays exhaustive when "disk_images" is off, since
+                // the two arms above disappear entirely rather than just
+                // being unreachable (docs/PLAN.md's "MartyPC buildability"
+                // -- this repo's own patch, not upstream).
+                #[cfg(not(feature = "disk_images"))]
+                #[allow(unreachable_patterns)]
+                _ => {}
             }
         }
 
@@ -1560,6 +1687,7 @@ impl BusInterface {
         let mut dma1 = self.dma1.take().unwrap();
 
         // Run the FDC, passing it DMA controller while DMA is still unattached.
+        #[cfg(feature = "disk_images")]
         if let Some(mut fdc) = self.fdc.take() {
             fdc.run(&mut dma1, self, us);
             self.fdc = Some(fdc);
@@ -1572,12 +1700,14 @@ impl BusInterface {
         }
         // Run the XT-IDE controller, passing it DMA controller while DMA is still unattached.
         // (No, it doesn't need the DMA controller. A future version might)
+        #[cfg(feature = "disk_images")]
         if let Some(mut xtide) = self.xtide.take() {
             xtide.run(&mut dma1, self, us);
             self.xtide = Some(xtide);
         }
         // Run the JR-IDE controller, passing it DMA controller while DMA is still unattached.
         // (No, it doesn't need the DMA controller. A future version might)
+        #[cfg(feature = "disk_images")]
         if let Some(mut jride) = self.jride.take() {
             jride.run(&mut dma1, self, us);
             self.jride = Some(jride);
@@ -1748,6 +1878,7 @@ impl BusInterface {
         }
 
         // Reset fdc
+        #[cfg(feature = "disk_images")]
         if let Some(fdc) = self.fdc.as_mut() {
             fdc.reset();
         }
@@ -1799,6 +1930,7 @@ impl BusInterface {
         &self.pit
     }
 
+    #[cfg(feature = "disk_images")]
     pub fn fdc(&self) -> &Option<Box<FloppyController>> {
         &self.fdc
     }
@@ -1827,6 +1959,7 @@ impl BusInterface {
         &mut self.serial
     }
 
+    #[cfg(feature = "disk_images")]
     pub fn fdc_mut(&mut self) -> &mut Option<Box<FloppyController>> {
         &mut self.fdc
     }
@@ -1839,10 +1972,12 @@ impl BusInterface {
         &mut self.hdc
     }
 
+    #[cfg(feature = "disk_images")]
     pub fn xtide_mut(&mut self) -> &mut Option<Box<XtIdeController>> {
         &mut self.xtide
     }
 
+    #[cfg(feature = "disk_images")]
     pub fn jride_mut(&mut self) -> &mut Option<Box<JrIdeController>> {
         &mut self.jride
     }
@@ -1972,6 +2107,7 @@ impl BusInterface {
             .unwrap_or_default()
     }
 
+    #[cfg(feature = "disk_images")]
     pub fn floppy_drive_ct(&self) -> usize {
         if let Some(fdc) = &self.fdc {
             fdc.drive_ct()
@@ -1981,19 +2117,24 @@ impl BusInterface {
         }
     }
 
+    #[cfg(not(feature = "disk_images"))]
+    pub fn floppy_drive_ct(&self) -> usize {
+        0
+    }
+
     pub fn hdd_ct(&self) -> usize {
         if let Some(hdc) = &self.hdc {
-            hdc.drive_ct()
+            return hdc.drive_ct();
         }
-        else if let Some(xtide) = &self.xtide {
-            xtide.drive_ct()
+        #[cfg(feature = "disk_images")]
+        if let Some(xtide) = &self.xtide {
+            return xtide.drive_ct();
         }
-        else if let Some(jride) = &self.jride {
-            jride.drive_ct()
+        #[cfg(feature = "disk_images")]
+        if let Some(jride) = &self.jride {
+            return jride.drive_ct();
         }
-        else {
-            0
-        }
+        0
     }
 
     pub fn cart_ct(&self) -> usize {

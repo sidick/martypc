@@ -31,6 +31,7 @@
 
 pub mod chs;
 pub mod disk;
+#[cfg(feature = "disk_images")]
 pub mod fdc;
 pub mod geometry;
 pub mod hdc;

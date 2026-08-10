@@ -31,17 +31,16 @@ use crate::{
     bus::{BusInterface, DeviceRunTimeUnit, IoDevice, MemoryMappedDevice, NO_IO_BYTE, OPEN_BUS_BYTE},
     cpu_common::LogicAnalyzer,
     device_traits::videocard::VideoCardDispatch,
-    devices::{
-        conventional_memory::ConventionalMemory,
-        fantasy_ems::FantasyEmsCard,
-        hdc::{jr_ide::JrIdeController, xebec::HardDiskController, xtide::XtIdeController},
-        lotech_ems::LotechEmsCard,
-    },
+    devices::{conventional_memory::ConventionalMemory, fantasy_ems::FantasyEmsCard, hdc::xebec::HardDiskController, lotech_ems::LotechEmsCard},
 };
+#[cfg(feature = "disk_images")]
+use crate::devices::hdc::{jr_ide::JrIdeController, xtide::XtIdeController};
 
 pub enum HdcDispatch {
     Xebec(HardDiskController),
+    #[cfg(feature = "disk_images")]
     XtIde(XtIdeController),
+    #[cfg(feature = "disk_images")]
     JrIde(JrIdeController),
 }
 
@@ -49,7 +48,9 @@ impl HdcDispatch {
     pub fn io_read_u8(&mut self, port: u16, delta: DeviceRunTimeUnit) -> u8 {
         match self {
             HdcDispatch::Xebec(hdc) => IoDevice::read_u8(hdc, port, delta),
+            #[cfg(feature = "disk_images")]
             HdcDispatch::XtIde(xtide) => IoDevice::read_u8(xtide, port, delta),
+            #[cfg(feature = "disk_images")]
             HdcDispatch::JrIde(jride) => IoDevice::read_u8(jride, port, delta),
         }
     }
@@ -64,27 +65,37 @@ impl HdcDispatch {
     ) {
         match self {
             HdcDispatch::Xebec(hdc) => IoDevice::write_u8(hdc, port, data, bus, delta, analyzer),
+            #[cfg(feature = "disk_images")]
             HdcDispatch::XtIde(xtide) => IoDevice::write_u8(xtide, port, data, bus, delta, analyzer),
+            #[cfg(feature = "disk_images")]
             HdcDispatch::JrIde(jride) => IoDevice::write_u8(jride, port, data, bus, delta, analyzer),
         }
     }
 
+    // Parameters go unused in the fallback `_` arm when "disk_images" is
+    // off (this repo's own vendor patch, not upstream).
+    #[cfg_attr(not(feature = "disk_images"), allow(unused_variables))]
     pub fn mmio_peek_u8(&self, address: usize, cpumem: Option<&[u8]>) -> u8 {
         match self {
+            #[cfg(feature = "disk_images")]
             HdcDispatch::JrIde(jride) => MemoryMappedDevice::mmio_peek_u8(jride, address, cpumem),
             _ => OPEN_BUS_BYTE,
         }
     }
 
+    #[cfg_attr(not(feature = "disk_images"), allow(unused_variables))]
     pub fn mmio_read_u8(&mut self, address: usize, ticks: u32, cpumem: Option<&[u8]>) -> (u8, u32) {
         match self {
+            #[cfg(feature = "disk_images")]
             HdcDispatch::JrIde(jride) => MemoryMappedDevice::mmio_read_u8(jride, address, ticks, cpumem),
             _ => (OPEN_BUS_BYTE, 0),
         }
     }
 
+    #[cfg_attr(not(feature = "disk_images"), allow(unused_variables))]
     pub fn mmio_write_u8(&mut self, address: usize, data: u8, ticks: u32, cpumem: Option<&mut [u8]>) -> u32 {
         match self {
+            #[cfg(feature = "disk_images")]
             HdcDispatch::JrIde(jride) => MemoryMappedDevice::mmio_write_u8(jride, address, data, ticks, cpumem),
             _ => 0,
         }

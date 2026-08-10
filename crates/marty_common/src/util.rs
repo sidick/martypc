@@ -30,7 +30,7 @@
    Define utility methods.
 */
 
-use web_time::Duration;
+use core::time::Duration;
 
 /// Format the provided Duration using the most appropriate unit given the magnitude of the Duration.
 pub fn format_duration(duration: Duration) -> String {

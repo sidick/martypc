@@ -32,6 +32,7 @@
 use core::fmt;
 use std::{fmt::Display, str::FromStr};
 
+#[cfg(feature = "disk_images")]
 use fluxfox::StandardFormat;
 use serde::{self, Deserializer};
 use serde_derive::Deserialize;
@@ -166,6 +167,7 @@ pub enum FloppyDriveType {
     Floppy144M,
 }
 
+#[cfg(feature = "disk_images")]
 impl FloppyDriveType {
     pub fn get_compatible_formats(&self) -> Vec<StandardFormat> {
         match self {
@@ -189,6 +191,7 @@ impl FloppyDriveType {
 }
 
 /// Convert MartyPC's FloppyDriveType to fluxfox's StandardFormat
+#[cfg(feature = "disk_images")]
 impl From<FloppyDriveType> for StandardFormat {
     fn from(val: FloppyDriveType) -> Self {
         match val {

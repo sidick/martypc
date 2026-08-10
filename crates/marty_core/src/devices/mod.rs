@@ -33,6 +33,7 @@
 pub mod a0;
 #[cfg(feature = "opl")]
 pub mod adlib;
+#[cfg(feature = "disk_images")]
 mod ata;
 pub mod cartridge_slots;
 pub mod cga;
@@ -42,7 +43,9 @@ pub mod dma;
 #[cfg(feature = "ega")]
 pub mod ega;
 pub mod fantasy_ems;
+#[cfg(feature = "disk_images")]
 pub mod fdc;
+#[cfg(feature = "disk_images")]
 pub mod floppy_drive;
 pub mod game_port;
 pub mod hdc;

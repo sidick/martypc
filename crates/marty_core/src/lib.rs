@@ -66,4 +66,5 @@ pub mod video_pll;
 pub mod arduino8088_validator;
 
 // Re-exported for use by frontend to populate file browser.
+#[cfg(feature = "disk_images")]
 pub use fluxfox::supported_extensions as supported_floppy_extensions;

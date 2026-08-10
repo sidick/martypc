@@ -101,6 +101,7 @@ impl BusInterface {
                     }
                 }
                 IoDeviceType::FloppyController => {
+                    #[cfg(feature = "disk_images")]
                     if let Some(fdc) = &mut self.fdc {
                         byte = Some(fdc.read_u8(port, nul_delta));
                     }
@@ -109,8 +110,11 @@ impl BusInterface {
                     if let Some(hdc) = &mut self.hdc {
                         byte = Some(hdc.read_u8(port, nul_delta));
                     }
-                    else if let Some(xtide) = &mut self.xtide {
-                        byte = Some(xtide.read_u8(port, nul_delta));
+                    #[cfg(feature = "disk_images")]
+                    if byte.is_none() {
+                        if let Some(xtide) = &mut self.xtide {
+                            byte = Some(xtide.read_u8(port, nul_delta));
+                        }
                     }
                 }
                 IoDeviceType::Serial => {
@@ -140,6 +144,16 @@ impl BusInterface {
                 IoDeviceType::Video(vid) => {
                     if let Some(video_dispatch) = self.videocards.get_mut(vid) {
                         byte = Some(video_dispatch.io_read_u8(port, DeviceRunTimeUnit::SystemTicks(sys_ticks)));
+                    }
+                }
+                IoDeviceType::CustomVideo => {
+                    if let Some(video) = &mut self.custom_video {
+                        byte = Some(video.read_u8(port, DeviceRunTimeUnit::SystemTicks(sys_ticks)));
+                    }
+                }
+                IoDeviceType::CustomIo => {
+                    if let Some(device) = &mut self.custom_io {
+                        byte = Some(device.read_u8(port, DeviceRunTimeUnit::SystemTicks(sys_ticks)));
                     }
                 }
                 IoDeviceType::Sound =>
@@ -292,6 +306,7 @@ impl BusInterface {
                     }
                 }
                 IoDeviceType::FloppyController => {
+                    #[cfg(feature = "disk_images")]
                     if let Some(mut fdc) = self.fdc.take() {
                         fdc.write_u8(port, data, Some(self), NULL_DELTA_US, analyzer);
                         resolved = true;
@@ -304,10 +319,13 @@ impl BusInterface {
                         resolved = true;
                         self.hdc = Some(hdc);
                     }
-                    else if let Some(mut xtide) = self.xtide.take() {
-                        xtide.write_u8(port, data, Some(self), NULL_DELTA_US, analyzer);
-                        resolved = true;
-                        self.xtide = Some(xtide);
+                    #[cfg(feature = "disk_images")]
+                    if !resolved {
+                        if let Some(mut xtide) = self.xtide.take() {
+                            xtide.write_u8(port, data, Some(self), NULL_DELTA_US, analyzer);
+                            resolved = true;
+                            self.xtide = Some(xtide);
+                        }
                     }
                 }
                 IoDeviceType::Serial => {
@@ -348,6 +366,18 @@ impl BusInterface {
                             DeviceRunTimeUnit::SystemTicks(sys_ticks),
                             analyzer,
                         );
+                        resolved = true;
+                    }
+                }
+                IoDeviceType::CustomVideo => {
+                    if let Some(video) = &mut self.custom_video {
+                        video.write_u8(port, data, None, DeviceRunTimeUnit::SystemTicks(sys_ticks), analyzer);
+                        resolved = true;
+                    }
+                }
+                IoDeviceType::CustomIo => {
+                    if let Some(device) = &mut self.custom_io {
+                        device.write_u8(port, data, None, DeviceRunTimeUnit::SystemTicks(sys_ticks), analyzer);
                         resolved = true;
                     }
                 }

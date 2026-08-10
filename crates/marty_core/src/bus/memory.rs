@@ -177,9 +177,22 @@ impl BusInterface {
                             return Ok(self.system_ticks_to_cpu_cycles(syswait));
                         }
                     }
+                    MmioDeviceType::CustomVideo => {
+                        if let Some(video) = &mut self.custom_video {
+                            let syswait = video.get_read_wait(address, system_ticks);
+                            return Ok(self.system_ticks_to_cpu_cycles(syswait));
+                        }
+                    }
+                    MmioDeviceType::CustomMemory => {
+                        if let Some(mem) = &mut self.custom_memory {
+                            let syswait = mem.get_read_wait(address, system_ticks);
+                            return Ok(self.system_ticks_to_cpu_cycles(syswait));
+                        }
+                    }
                     MmioDeviceType::Cart => {
                         return Ok(0);
                     }
+                    #[cfg(feature = "disk_images")]
                     MmioDeviceType::JrIde => {
                         if let Some(jride) = &mut self.jride {
                             let syswait = jride.get_read_wait(address, system_ticks);
@@ -213,9 +226,22 @@ impl BusInterface {
                             return Ok(self.system_ticks_to_cpu_cycles(syswait));
                         }
                     }
+                    MmioDeviceType::CustomVideo => {
+                        if let Some(video) = &mut self.custom_video {
+                            let syswait = video.get_write_wait(address, system_ticks);
+                            return Ok(self.system_ticks_to_cpu_cycles(syswait));
+                        }
+                    }
+                    MmioDeviceType::CustomMemory => {
+                        if let Some(mem) = &mut self.custom_memory {
+                            let syswait = mem.get_write_wait(address, system_ticks);
+                            return Ok(self.system_ticks_to_cpu_cycles(syswait));
+                        }
+                    }
                     MmioDeviceType::Cart => {
                         return Ok(0);
                     }
+                    #[cfg(feature = "disk_images")]
                     MmioDeviceType::JrIde => {
                         if let Some(jride) = &mut self.jride {
                             let syswait = jride.get_write_wait(address, system_ticks);
@@ -248,6 +274,18 @@ impl BusInterface {
                             return Ok(card_dispatch.mmio_read_u8(address, system_ticks, Some(&self.memory)));
                         }
                     }
+                    MmioDeviceType::CustomVideo => {
+                        if let Some(video) = &mut self.custom_video {
+                            let (data, waits) = video.mmio_read_u8(address, system_ticks, Some(&self.memory));
+                            return Ok((data, waits));
+                        }
+                    }
+                    MmioDeviceType::CustomMemory => {
+                        if let Some(mem) = &mut self.custom_memory {
+                            let (data, waits) = mem.mmio_read_u8(address, system_ticks, Some(&self.memory));
+                            return Ok((data, waits));
+                        }
+                    }
                     MmioDeviceType::Ems => {
                         if let Some(ems) = &mut self.ems {
                             let (data, _waits) = MemoryMappedDevice::mmio_read_u8(ems, address, system_ticks, None);
@@ -266,6 +304,7 @@ impl BusInterface {
                             return Ok((data, 0));
                         }
                     }
+                    #[cfg(feature = "disk_images")]
                     MmioDeviceType::JrIde => {
                         if let Some(jride) = &mut self.jride {
                             let (data, _waits) = MemoryMappedDevice::mmio_read_u8(
@@ -312,6 +351,16 @@ impl BusInterface {
                             return Ok(card_dispatch.mmio_peek_u8(address, Some(&self.memory)));
                         }
                     }
+                    MmioDeviceType::CustomVideo => {
+                        if let Some(video) = &self.custom_video {
+                            return Ok(video.mmio_peek_u8(address, Some(&self.memory)));
+                        }
+                    }
+                    MmioDeviceType::CustomMemory => {
+                        if let Some(mem) = &self.custom_memory {
+                            return Ok(mem.mmio_peek_u8(address, Some(&self.memory)));
+                        }
+                    }
                     MmioDeviceType::Ems => {
                         if let Some(ems) = &self.ems {
                             let data = MemoryMappedDevice::mmio_peek_u8(ems, address, None);
@@ -328,6 +377,7 @@ impl BusInterface {
                             return Ok(data);
                         }
                     }
+                    #[cfg(feature = "disk_images")]
                     MmioDeviceType::JrIde => {
                         if let Some(jride) = &self.jride {
                             let data = MemoryMappedDevice::mmio_peek_u8(&**jride, address, Some(&self.memory));
@@ -407,6 +457,18 @@ impl BusInterface {
                             ));
                         }
                     }
+                    MmioDeviceType::CustomVideo => {
+                        if let Some(video) = &mut self.custom_video {
+                            let system_ticks = self.cycles_to_ticks[cycles as usize];
+                            return Ok(video.mmio_write_u8(address, data, system_ticks, Some(&mut self.memory)));
+                        }
+                    }
+                    MmioDeviceType::CustomMemory => {
+                        if let Some(mem) = &mut self.custom_memory {
+                            let system_ticks = self.cycles_to_ticks[cycles as usize];
+                            return Ok(mem.mmio_write_u8(address, data, system_ticks, Some(&mut self.memory)));
+                        }
+                    }
                     MmioDeviceType::Ems => {
                         if let Some(ems) = &mut self.ems {
                             MemoryMappedDevice::mmio_write_u8(ems, address, data, 0, None);
@@ -415,6 +477,7 @@ impl BusInterface {
                             MemoryMappedDevice::mmio_write_u8(fantasy_ems, address, data, 0, None);
                         }
                     }
+                    #[cfg(feature = "disk_images")]
                     MmioDeviceType::JrIde => {
                         if let Some(jride) = &mut self.jride {
                             MemoryMappedDevice::mmio_write_u8(&mut **jride, address, data, 0, None);

@@ -31,8 +31,10 @@
 //! - xtide: The XT-IDE hard disk controller.
 
 pub mod at_formats;
+#[cfg(feature = "disk_images")]
 pub mod jr_ide;
 pub mod xebec;
+#[cfg(feature = "disk_images")]
 pub mod xtide;
 
 pub const DEFAULT_SECTOR_SIZE: usize = 512;

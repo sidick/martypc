@@ -407,8 +407,14 @@ pub fn create_vhd(filename: OsString, c: u16, h: u8, s: u8) -> Result<File, anyh
     // Create the requested file
     let mut vhd_file = File::create(filename)?;
 
-    // Generate a new UUID for our VHD
-    let uuid = Uuid::new_v4();
+    // Generate a new UUID for our VHD.
+    // Patched for wasm32-unknown-unknown (non-browser sandbox, no
+    // randomness source available): this function isn't reachable from a
+    // Copperline plugin anyway, since it calls std::fs::File::create
+    // directly a few lines up, and WASM plugins have no filesystem access
+    // (only the resource_* host imports) -- Uuid::nil() here is just what
+    // lets the crate compile, not a claim of real uniqueness.
+    let uuid = Uuid::nil();
 
     let mut write_buf = vec![0; VHD_SECTOR_SIZE];
 

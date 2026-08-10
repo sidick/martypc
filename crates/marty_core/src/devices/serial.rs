@@ -50,7 +50,7 @@ use serde_derive::Deserialize;
 #[cfg(feature = "serial")]
 use std::io::Read;
 #[cfg(feature = "serial")]
-use web_time::Duration;
+use core::time::Duration;
 /*  1.8Mhz Oscillator.
     Divided by 16, then again by programmable Divisor to select baud rate.
     The 8250 has a maximum baud of 9600.

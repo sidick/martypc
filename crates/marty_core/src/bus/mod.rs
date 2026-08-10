@@ -469,6 +469,7 @@ pub enum MmioDeviceType {
     Cart,
     JrIde,
     CustomVideo,
+    CustomVideo2,
     CustomMemory,
 }
 
@@ -532,6 +533,7 @@ pub struct BusInterface {
     sound_source: Option<DSoundSource>,
     sn76489: Option<Sn76489>,
     custom_video: Option<Box<dyn CustomVideoDevice>>,
+    custom_video_2: Option<Box<dyn CustomVideoDevice>>,
     custom_io: Option<Box<dyn IoDevice>>,
     custom_memory: Option<Box<dyn CustomMemoryDevice>>,
 
@@ -627,6 +629,7 @@ impl Default for BusInterface {
             sound_source: None,
             sn76489: None,
             custom_video: None,
+            custom_video_2: None,
             custom_io: None,
             custom_memory: None,
             videocards: MartyHashMap::default(),
@@ -780,6 +783,22 @@ impl BusInterface {
         }
     }
 
+    /// Install the second, independent [`CustomVideoDevice`] slot -- see
+    /// `IoDeviceType::CustomVideo2`'s docs for why this exists.
+    pub fn install_custom_video_device_2(&mut self, device: Box<dyn CustomVideoDevice>) {
+        add_io_device!(self, device, IoDeviceType::CustomVideo2);
+        add_mmio_device!(self, device, MmioDeviceType::CustomVideo2);
+        self.custom_video_2 = Some(device);
+    }
+
+    /// The installed secondary [`CustomVideoDevice`], if any.
+    pub fn custom_video_2_mut(&mut self) -> Option<&mut dyn CustomVideoDevice> {
+        match self.custom_video_2 {
+            Some(ref mut device) => Some(&mut **device),
+            None => None,
+        }
+    }
+
     /// Install the single caller-supplied I/O-only device (see
     /// `IoDeviceType::CustomIo`'s docs for why this is separate from
     /// [`BusInterface::install_custom_video_device`]).
@@ -803,18 +822,20 @@ impl BusInterface {
         }
     }
 
-    /// Both installed custom devices' backing bytes at once, disjointly
-    /// borrowed from the same `&mut self` in one function body -- calling
-    /// `custom_video_mut()` and `custom_memory_mut()` separately and
-    /// holding both results doesn't borrow-check (each call opaquely
-    /// borrows all of `self` as far as the caller can see, even though
-    /// the two fields don't overlap). For a host that needs to alias
-    /// several dual-ported banks into another bus at once (e.g.
-    /// `crate::machine::Machine::external_banks_mut` in the embedding
-    /// project).
-    pub fn custom_video_and_memory_mut(&mut self) -> (Option<&mut [u8]>, Option<&mut [u8]>) {
+    /// All installed custom devices' backing bytes at once
+    /// (`custom_video`, `custom_video_2`, `custom_memory`, in that
+    /// order), disjointly borrowed from the same `&mut self` in one
+    /// function body -- calling `custom_video_mut()`/`custom_video_2_mut()`/
+    /// `custom_memory_mut()` separately and holding the results doesn't
+    /// borrow-check (each call opaquely borrows all of `self` as far as
+    /// the caller can see, even though the fields don't overlap). For a
+    /// host that needs to alias several dual-ported banks into another
+    /// bus at once (e.g. `crate::machine::Machine::external_banks_mut` in
+    /// the embedding project).
+    pub fn custom_devices_mut(&mut self) -> (Option<&mut [u8]>, Option<&mut [u8]>, Option<&mut [u8]>) {
         (
             self.custom_video.as_deref_mut().map(CustomVideoDevice::vram_mut),
+            self.custom_video_2.as_deref_mut().map(CustomVideoDevice::vram_mut),
             self.custom_memory.as_deref_mut().map(CustomMemoryDevice::ram_mut),
         )
     }

@@ -151,6 +151,11 @@ impl BusInterface {
                         byte = Some(video.read_u8(port, DeviceRunTimeUnit::SystemTicks(sys_ticks)));
                     }
                 }
+                IoDeviceType::CustomVideo2 => {
+                    if let Some(video) = &mut self.custom_video_2 {
+                        byte = Some(video.read_u8(port, DeviceRunTimeUnit::SystemTicks(sys_ticks)));
+                    }
+                }
                 IoDeviceType::CustomIo => {
                     if let Some(device) = &mut self.custom_io {
                         byte = Some(device.read_u8(port, DeviceRunTimeUnit::SystemTicks(sys_ticks)));
@@ -371,6 +376,12 @@ impl BusInterface {
                 }
                 IoDeviceType::CustomVideo => {
                     if let Some(video) = &mut self.custom_video {
+                        video.write_u8(port, data, None, DeviceRunTimeUnit::SystemTicks(sys_ticks), analyzer);
+                        resolved = true;
+                    }
+                }
+                IoDeviceType::CustomVideo2 => {
+                    if let Some(video) = &mut self.custom_video_2 {
                         video.write_u8(port, data, None, DeviceRunTimeUnit::SystemTicks(sys_ticks), analyzer);
                         resolved = true;
                     }

@@ -183,6 +183,12 @@ impl BusInterface {
                             return Ok(self.system_ticks_to_cpu_cycles(syswait));
                         }
                     }
+                    MmioDeviceType::CustomVideo2 => {
+                        if let Some(video) = &mut self.custom_video_2 {
+                            let syswait = video.get_read_wait(address, system_ticks);
+                            return Ok(self.system_ticks_to_cpu_cycles(syswait));
+                        }
+                    }
                     MmioDeviceType::CustomMemory => {
                         if let Some(mem) = &mut self.custom_memory {
                             let syswait = mem.get_read_wait(address, system_ticks);
@@ -232,6 +238,12 @@ impl BusInterface {
                             return Ok(self.system_ticks_to_cpu_cycles(syswait));
                         }
                     }
+                    MmioDeviceType::CustomVideo2 => {
+                        if let Some(video) = &mut self.custom_video_2 {
+                            let syswait = video.get_write_wait(address, system_ticks);
+                            return Ok(self.system_ticks_to_cpu_cycles(syswait));
+                        }
+                    }
                     MmioDeviceType::CustomMemory => {
                         if let Some(mem) = &mut self.custom_memory {
                             let syswait = mem.get_write_wait(address, system_ticks);
@@ -276,6 +288,12 @@ impl BusInterface {
                     }
                     MmioDeviceType::CustomVideo => {
                         if let Some(video) = &mut self.custom_video {
+                            let (data, waits) = video.mmio_read_u8(address, system_ticks, Some(&self.memory));
+                            return Ok((data, waits));
+                        }
+                    }
+                    MmioDeviceType::CustomVideo2 => {
+                        if let Some(video) = &mut self.custom_video_2 {
                             let (data, waits) = video.mmio_read_u8(address, system_ticks, Some(&self.memory));
                             return Ok((data, waits));
                         }
@@ -353,6 +371,11 @@ impl BusInterface {
                     }
                     MmioDeviceType::CustomVideo => {
                         if let Some(video) = &self.custom_video {
+                            return Ok(video.mmio_peek_u8(address, Some(&self.memory)));
+                        }
+                    }
+                    MmioDeviceType::CustomVideo2 => {
+                        if let Some(video) = &self.custom_video_2 {
                             return Ok(video.mmio_peek_u8(address, Some(&self.memory)));
                         }
                     }
@@ -459,6 +482,12 @@ impl BusInterface {
                     }
                     MmioDeviceType::CustomVideo => {
                         if let Some(video) = &mut self.custom_video {
+                            let system_ticks = self.cycles_to_ticks[cycles as usize];
+                            return Ok(video.mmio_write_u8(address, data, system_ticks, Some(&mut self.memory)));
+                        }
+                    }
+                    MmioDeviceType::CustomVideo2 => {
+                        if let Some(video) = &mut self.custom_video_2 {
                             let system_ticks = self.cycles_to_ticks[cycles as usize];
                             return Ok(video.mmio_write_u8(address, data, system_ticks, Some(&mut self.memory)));
                         }

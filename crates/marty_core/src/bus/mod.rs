@@ -355,6 +355,19 @@ pub trait CustomVideoDevice: IoDevice + MemoryMappedDevice {
     /// entirely). Not a blanket impl: every device must say explicitly
     /// where its backing bytes live.
     fn vram_mut(&mut self) -> &mut [u8];
+
+    /// Advance this device by `sys_ticks` system-clock ticks (the same
+    /// unit `BusInterface::run_devices` feeds its own built-in video
+    /// cards), so CRTC-driven state (hsync/vsync/display-enable, and
+    /// anything gated on them like a status register's retrace bits)
+    /// keeps moving even though this device sits in the separate
+    /// `CustomVideoDevice` slot `run_devices` doesn't know about. Default
+    /// no-op: a device with no time-driven state (or one the embedding
+    /// host doesn't need ticked) can ignore this entirely -- there's no
+    /// way to call a device-specific method through this trait object
+    /// otherwise once installed, since the concrete type is erased (same
+    /// reasoning as `CustomMemoryDevice::set_active_address`).
+    fn run(&mut self, _sys_ticks: u32) {}
 }
 
 /// A caller-supplied pure-memory device -- like [`CustomVideoDevice`] but
@@ -983,27 +996,38 @@ impl BusInterface {
             device.irq_acknowledged();
         }
 
-        if let (Some(channel), Some(mut dma)) = (device.dma_channel(), self.dma1.take()) {
-            if dma.check_dma_ready(channel) {
-                for _ in 0..max_bytes {
-                    match device.dma_pending() {
-                        Some(DmaDirection::DeviceToMemory) => {
-                            let byte = device.dma_read_byte();
-                            dma.do_dma_write_u8(self, channel, byte);
+        // `device.dma_channel()` is checked *before* `self.dma1.take()`
+        // runs at all (not as a joint tuple pattern): tuple construction
+        // evaluates both elements eagerly regardless of whether the
+        // pattern match that follows succeeds, so `(device.dma_channel(),
+        // self.dma1.take())` would silently take `dma1` out and then drop
+        // it on the floor -- never restoring it -- on every call where
+        // the device has no channel active (the common idle case, e.g.
+        // `FdcDevice` between commands), permanently losing the DMA
+        // controller after the first such call.
+        if let Some(channel) = device.dma_channel() {
+            if let Some(mut dma) = self.dma1.take() {
+                if dma.check_dma_ready(channel) {
+                    for _ in 0..max_bytes {
+                        match device.dma_pending() {
+                            Some(DmaDirection::DeviceToMemory) => {
+                                let byte = device.dma_read_byte();
+                                dma.do_dma_write_u8(self, channel, byte);
+                            }
+                            Some(DmaDirection::MemoryToDevice) => {
+                                let byte = dma.do_dma_read_u8(self, channel);
+                                device.dma_write_byte(byte);
+                            }
+                            None => break,
                         }
-                        Some(DmaDirection::MemoryToDevice) => {
-                            let byte = dma.do_dma_read_u8(self, channel);
-                            device.dma_write_byte(byte);
+                        if dma.check_terminal_count(channel) {
+                            device.dma_terminal_count();
+                            break;
                         }
-                        None => break,
-                    }
-                    if dma.check_terminal_count(channel) {
-                        device.dma_terminal_count();
-                        break;
                     }
                 }
+                self.dma1 = Some(dma);
             }
-            self.dma1 = Some(dma);
         }
 
         self.custom_dma_io = Some(device);

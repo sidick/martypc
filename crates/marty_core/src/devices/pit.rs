@@ -424,10 +424,19 @@ impl Channel {
                 (0, true) => bus.pic_mut().as_mut().unwrap().request_interrupt(0),
                 (0, false) => bus.pic_mut().as_mut().unwrap().clear_interrupt(0),
                 (1, true) => {
-                    let dma = bus.dma_mut().as_mut().unwrap();
                     // Channel 1 is dedicated to sending DREQ0 signals to the DMA controller
-                    // to perform DRAM refresh.
-                    dma.request_service(0);
+                    // to perform DRAM refresh. `bus.dma_mut()` can be transiently `None`
+                    // here: `BusInterface`'s own per-cycle device update takes `self.dma1`
+                    // out (see its "Run the DMA controller" section) before ticking the PIT
+                    // and other devices with it borrowed out, so a PIT mode write landing on
+                    // that exact cycle (from CPU-driven `OUT` execution nested inside the
+                    // same update) can reach here while DMA is unattached. Skipping the
+                    // refresh request on that one cycle is harmless -- refresh cycles recur
+                    // continuously, so missing a single DREQ0 pulse isn't observable -- and
+                    // beats panicking the whole machine.
+                    if let Some(dma) = bus.dma_mut().as_mut() {
+                        dma.request_service(0);
+                    }
                 }
                 (1, false) => {}
                 (2, state) => {

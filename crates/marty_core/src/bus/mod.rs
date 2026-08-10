@@ -365,6 +365,15 @@ pub trait CustomMemoryDevice: MemoryMappedDevice {
     /// Direct access to this device's backing bytes, for the same reason
     /// as [`CustomVideoDevice::vram_mut`].
     fn ram_mut(&mut self) -> &mut [u8];
+
+    /// Some memory devices are reachable at more than one PC address at
+    /// once (`get_mapping()` returning multiple `MemRangeDescriptor`s)
+    /// and need telling which one is currently "live" -- e.g. a
+    /// runtime-selectable decode segment. Devices with one fixed address
+    /// (the common case) can leave this at its default no-op; there's no
+    /// way to call a device-specific method through this trait object
+    /// otherwise once installed, since the concrete type is erased.
+    fn set_active_address(&mut self, _address: usize) {}
 }
 
 /// Which way a pending DMA byte should move -- see
@@ -517,6 +526,15 @@ pub enum MmioDeviceType {
     CustomVideo,
     CustomVideo2,
     CustomMemory,
+    /// A second, independent `CustomMemoryDevice` slot -- see
+    /// `BusInterface::install_custom_memory_device_2`. For a device
+    /// reachable at more than one fixed address at once (e.g. runtime-
+    /// selectable decoding), not a second unrelated memory device: such
+    /// a device's own `get_mapping()` can already return multiple
+    /// `MemRangeDescriptor`s for one slot. This slot exists for a
+    /// *second, independent* memory device sharing no state with the
+    /// first (mirrors `CustomVideo2`'s reasoning).
+    CustomMemory2,
 }
 
 // Main bus struct.
@@ -582,6 +600,7 @@ pub struct BusInterface {
     custom_video_2: Option<Box<dyn CustomVideoDevice>>,
     custom_io: Option<Box<dyn IoDevice>>,
     custom_memory: Option<Box<dyn CustomMemoryDevice>>,
+    custom_memory_2: Option<Box<dyn CustomMemoryDevice>>,
     custom_dma_io: Option<Box<dyn DmaCapableIoDevice>>,
 
     videocards:    MartyHashMap<VideoCardId, VideoCardDispatch>,
@@ -679,6 +698,7 @@ impl Default for BusInterface {
             custom_video_2: None,
             custom_io: None,
             custom_memory: None,
+            custom_memory_2: None,
             custom_dma_io: None,
             videocards: MartyHashMap::default(),
             videocard_ids: Vec::new(),
@@ -870,21 +890,41 @@ impl BusInterface {
         }
     }
 
+    /// Install the second, independent [`CustomMemoryDevice`] slot -- see
+    /// `MmioDeviceType::CustomMemory2`'s docs for why this exists.
+    pub fn install_custom_memory_device_2(&mut self, device: Box<dyn CustomMemoryDevice>) {
+        add_mmio_device!(self, device, MmioDeviceType::CustomMemory2);
+        self.custom_memory_2 = Some(device);
+    }
+
+    /// The installed secondary [`CustomMemoryDevice`], if any.
+    pub fn custom_memory_2_mut(&mut self) -> Option<&mut dyn CustomMemoryDevice> {
+        match self.custom_memory_2 {
+            Some(ref mut device) => Some(&mut **device),
+            None => None,
+        }
+    }
+
     /// All installed custom devices' backing bytes at once
-    /// (`custom_video`, `custom_video_2`, `custom_memory`, in that
-    /// order), disjointly borrowed from the same `&mut self` in one
-    /// function body -- calling `custom_video_mut()`/`custom_video_2_mut()`/
-    /// `custom_memory_mut()` separately and holding the results doesn't
+    /// (`custom_video`, `custom_video_2`, `custom_memory`,
+    /// `custom_memory_2`, in that order), disjointly borrowed from the
+    /// same `&mut self` in one function body -- calling
+    /// `custom_video_mut()`/`custom_video_2_mut()`/`custom_memory_mut()`/
+    /// `custom_memory_2_mut()` separately and holding the results doesn't
     /// borrow-check (each call opaquely borrows all of `self` as far as
     /// the caller can see, even though the fields don't overlap). For a
     /// host that needs to alias several dual-ported banks into another
     /// bus at once (e.g. `crate::machine::Machine::external_banks_mut` in
     /// the embedding project).
-    pub fn custom_devices_mut(&mut self) -> (Option<&mut [u8]>, Option<&mut [u8]>, Option<&mut [u8]>) {
+    #[allow(clippy::type_complexity)]
+    pub fn custom_devices_mut(
+        &mut self,
+    ) -> (Option<&mut [u8]>, Option<&mut [u8]>, Option<&mut [u8]>, Option<&mut [u8]>) {
         (
             self.custom_video.as_deref_mut().map(CustomVideoDevice::vram_mut),
             self.custom_video_2.as_deref_mut().map(CustomVideoDevice::vram_mut),
             self.custom_memory.as_deref_mut().map(CustomMemoryDevice::ram_mut),
+            self.custom_memory_2.as_deref_mut().map(CustomMemoryDevice::ram_mut),
         )
     }
 

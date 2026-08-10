@@ -195,6 +195,12 @@ impl BusInterface {
                             return Ok(self.system_ticks_to_cpu_cycles(syswait));
                         }
                     }
+                    MmioDeviceType::CustomMemory2 => {
+                        if let Some(mem) = &mut self.custom_memory_2 {
+                            let syswait = mem.get_read_wait(address, system_ticks);
+                            return Ok(self.system_ticks_to_cpu_cycles(syswait));
+                        }
+                    }
                     MmioDeviceType::Cart => {
                         return Ok(0);
                     }
@@ -250,6 +256,12 @@ impl BusInterface {
                             return Ok(self.system_ticks_to_cpu_cycles(syswait));
                         }
                     }
+                    MmioDeviceType::CustomMemory2 => {
+                        if let Some(mem) = &mut self.custom_memory_2 {
+                            let syswait = mem.get_write_wait(address, system_ticks);
+                            return Ok(self.system_ticks_to_cpu_cycles(syswait));
+                        }
+                    }
                     MmioDeviceType::Cart => {
                         return Ok(0);
                     }
@@ -300,6 +312,12 @@ impl BusInterface {
                     }
                     MmioDeviceType::CustomMemory => {
                         if let Some(mem) = &mut self.custom_memory {
+                            let (data, waits) = mem.mmio_read_u8(address, system_ticks, Some(&self.memory));
+                            return Ok((data, waits));
+                        }
+                    }
+                    MmioDeviceType::CustomMemory2 => {
+                        if let Some(mem) = &mut self.custom_memory_2 {
                             let (data, waits) = mem.mmio_read_u8(address, system_ticks, Some(&self.memory));
                             return Ok((data, waits));
                         }
@@ -381,6 +399,11 @@ impl BusInterface {
                     }
                     MmioDeviceType::CustomMemory => {
                         if let Some(mem) = &self.custom_memory {
+                            return Ok(mem.mmio_peek_u8(address, Some(&self.memory)));
+                        }
+                    }
+                    MmioDeviceType::CustomMemory2 => {
+                        if let Some(mem) = &self.custom_memory_2 {
                             return Ok(mem.mmio_peek_u8(address, Some(&self.memory)));
                         }
                     }
@@ -494,6 +517,12 @@ impl BusInterface {
                     }
                     MmioDeviceType::CustomMemory => {
                         if let Some(mem) = &mut self.custom_memory {
+                            let system_ticks = self.cycles_to_ticks[cycles as usize];
+                            return Ok(mem.mmio_write_u8(address, data, system_ticks, Some(&mut self.memory)));
+                        }
+                    }
+                    MmioDeviceType::CustomMemory2 => {
+                        if let Some(mem) = &mut self.custom_memory_2 {
                             let system_ticks = self.cycles_to_ticks[cycles as usize];
                             return Ok(mem.mmio_write_u8(address, data, system_ticks, Some(&mut self.memory)));
                         }

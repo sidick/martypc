@@ -161,6 +161,11 @@ impl BusInterface {
                         byte = Some(device.read_u8(port, DeviceRunTimeUnit::SystemTicks(sys_ticks)));
                     }
                 }
+                IoDeviceType::CustomDmaIo => {
+                    if let Some(device) = &mut self.custom_dma_io {
+                        byte = Some(device.read_u8(port, DeviceRunTimeUnit::SystemTicks(sys_ticks)));
+                    }
+                }
                 IoDeviceType::Sound =>
                 {
                     #[cfg(feature = "opl")]
@@ -388,6 +393,12 @@ impl BusInterface {
                 }
                 IoDeviceType::CustomIo => {
                     if let Some(device) = &mut self.custom_io {
+                        device.write_u8(port, data, None, DeviceRunTimeUnit::SystemTicks(sys_ticks), analyzer);
+                        resolved = true;
+                    }
+                }
+                IoDeviceType::CustomDmaIo => {
+                    if let Some(device) = &mut self.custom_dma_io {
                         device.write_u8(port, data, None, DeviceRunTimeUnit::SystemTicks(sys_ticks), analyzer);
                         resolved = true;
                     }

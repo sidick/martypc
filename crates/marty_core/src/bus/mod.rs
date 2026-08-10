@@ -334,6 +334,12 @@ pub enum IoDeviceType {
     /// port) have no video RAM and no business implementing
     /// `MemoryMappedDevice` at all.
     CustomIo,
+    /// A single caller-supplied device that also needs DMA and interrupt
+    /// service outside the CPU-driven read/write path -- see
+    /// `DmaCapableIoDevice` and `BusInterface::service_custom_dma_io`.
+    /// Separate from `CustomIo` because most I/O-only devices need
+    /// neither.
+    CustomDmaIo,
 }
 
 /// A caller-supplied device combining [`IoDevice`] and [`MemoryMappedDevice`],
@@ -359,6 +365,46 @@ pub trait CustomMemoryDevice: MemoryMappedDevice {
     /// Direct access to this device's backing bytes, for the same reason
     /// as [`CustomVideoDevice::vram_mut`].
     fn ram_mut(&mut self) -> &mut [u8];
+}
+
+/// Which way a pending DMA byte should move -- see
+/// [`DmaCapableIoDevice::dma_pending`].
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum DmaDirection {
+    /// Device -> host memory (a disk read, a sound sample fetch, ...).
+    DeviceToMemory,
+    /// Host memory -> device (a disk write, ...).
+    MemoryToDevice,
+}
+
+/// A caller-supplied device that needs DMA and interrupt service outside
+/// the CPU-driven `io_read_u8`/`io_write_u8` path -- e.g. a floppy
+/// controller transferring sector data via a DMA channel and raising an
+/// IRQ on command completion. `BusInterface` has no scheduler of its own
+/// to drive this from (real hardware's DREQ/DACK handshake and interrupt
+/// controller run continuously, independent of the CPU instruction
+/// stream); [`BusInterface::service_custom_dma_io`] is the embedding
+/// host's hook to call once per tick instead.
+pub trait DmaCapableIoDevice: IoDevice {
+    /// Which DMA channel this device uses, if any right now.
+    fn dma_channel(&self) -> Option<usize>;
+    /// `Some(direction)` while the device has a byte ready to transfer
+    /// (device-to-memory) or wants one (memory-to-device).
+    fn dma_pending(&self) -> Option<DmaDirection>;
+    /// Device -> memory: supply the next byte.
+    fn dma_read_byte(&mut self) -> u8;
+    /// Memory -> device: consume the next byte.
+    fn dma_write_byte(&mut self, byte: u8);
+    /// The DMA controller reached terminal count on this device's
+    /// channel; the transfer is over regardless of whether the device
+    /// thought it had more data.
+    fn dma_terminal_count(&mut self);
+    /// `Some(irq)` (0-7, primary PIC only) while the device wants
+    /// service; the caller (`service_custom_dma_io`) calls
+    /// `irq_acknowledged` immediately after requesting it so the same
+    /// edge isn't requested again every tick.
+    fn irq_pending(&self) -> Option<u8>;
+    fn irq_acknowledged(&mut self);
 }
 
 pub enum IoDeviceDispatch {
@@ -536,6 +582,7 @@ pub struct BusInterface {
     custom_video_2: Option<Box<dyn CustomVideoDevice>>,
     custom_io: Option<Box<dyn IoDevice>>,
     custom_memory: Option<Box<dyn CustomMemoryDevice>>,
+    custom_dma_io: Option<Box<dyn DmaCapableIoDevice>>,
 
     videocards:    MartyHashMap<VideoCardId, VideoCardDispatch>,
     videocard_ids: Vec<VideoCardId>,
@@ -632,6 +679,7 @@ impl Default for BusInterface {
             custom_video_2: None,
             custom_io: None,
             custom_memory: None,
+            custom_dma_io: None,
             videocards: MartyHashMap::default(),
             videocard_ids: Vec::new(),
 
@@ -838,6 +886,87 @@ impl BusInterface {
             self.custom_video_2.as_deref_mut().map(CustomVideoDevice::vram_mut),
             self.custom_memory.as_deref_mut().map(CustomMemoryDevice::ram_mut),
         )
+    }
+
+    /// The primary 8259 PIC, for a custom device that needs to request an
+    /// interrupt outside the CPU-driven `io_read_u8`/`io_write_u8` path
+    /// (e.g. a DMA-capable device's tick-driven service routine -- see
+    /// [`BusInterface::service_custom_dma_io`]). `None` only if
+    /// `install_devices` was never called or the machine description has
+    /// no PIC, neither true for any machine this embedding project builds.
+    pub fn pic1_mut(&mut self) -> Option<&mut Pic> {
+        self.pic1.as_deref_mut()
+    }
+
+    /// The primary 8237 DMA controller, for the same reason as
+    /// [`BusInterface::pic1_mut`].
+    pub fn dma1_mut(&mut self) -> Option<&mut DMAController> {
+        self.dma1.as_deref_mut()
+    }
+
+    /// Install the single caller-supplied [`DmaCapableIoDevice`].
+    pub fn install_custom_dma_io_device(&mut self, device: Box<dyn DmaCapableIoDevice>) {
+        add_io_device!(self, device, IoDeviceType::CustomDmaIo);
+        self.custom_dma_io = Some(device);
+    }
+
+    /// The installed [`DmaCapableIoDevice`], if any.
+    pub fn custom_dma_io_mut(&mut self) -> Option<&mut dyn DmaCapableIoDevice> {
+        match self.custom_dma_io {
+            Some(ref mut device) => Some(&mut **device),
+            None => None,
+        }
+    }
+
+    /// Service the installed [`DmaCapableIoDevice`], if any: raise its
+    /// pending interrupt (if any) on the primary PIC, then transfer up to
+    /// `max_bytes` on its DMA channel (if any, and if that channel isn't
+    /// masked). Call once per tick from the embedding host's scheduler --
+    /// see the trait's docs for why `BusInterface` doesn't drive this
+    /// itself.
+    ///
+    /// Takes `custom_dma_io`/`dma1`/`pic1` out of `self` and puts them
+    /// back before returning, rather than borrowing them directly: `dma1`
+    /// (`DMAController::do_dma_read_u8`/`do_dma_write_u8`) needs a
+    /// `&mut BusInterface` to actually move the byte to/from memory, and
+    /// that can't be `self` while `self.dma1` is also borrowed -- the
+    /// same self-referential-borrow problem `custom_devices_mut` works
+    /// around, one level deeper here since the callee needs the whole
+    /// bus, not just a slice of it.
+    pub fn service_custom_dma_io(&mut self, max_bytes: u32) {
+        let Some(mut device) = self.custom_dma_io.take() else { return };
+
+        if let Some(irq) = device.irq_pending() {
+            if let Some(pic) = self.pic1.as_deref_mut() {
+                pic.request_interrupt(irq);
+            }
+            device.irq_acknowledged();
+        }
+
+        if let (Some(channel), Some(mut dma)) = (device.dma_channel(), self.dma1.take()) {
+            if dma.check_dma_ready(channel) {
+                for _ in 0..max_bytes {
+                    match device.dma_pending() {
+                        Some(DmaDirection::DeviceToMemory) => {
+                            let byte = device.dma_read_byte();
+                            dma.do_dma_write_u8(self, channel, byte);
+                        }
+                        Some(DmaDirection::MemoryToDevice) => {
+                            let byte = dma.do_dma_read_u8(self, channel);
+                            device.dma_write_byte(byte);
+                        }
+                        None => break,
+                    }
+                    if dma.check_terminal_count(channel) {
+                        device.dma_terminal_count();
+                        break;
+                    }
+                }
+            }
+            self.dma1 = Some(dma);
+        }
+
+        self.custom_dma_io = Some(device);
     }
 
     /// Register a memory-mapped device.

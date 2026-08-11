@@ -334,6 +334,13 @@ pub enum IoDeviceType {
     /// port) have no video RAM and no business implementing
     /// `MemoryMappedDevice` at all.
     CustomIo,
+    /// A second, independent `CustomIo` slot -- see `BusInterface::
+    /// install_custom_io_device_2`. Same reasoning as `CustomVideo2`:
+    /// a caller may need two unrelated I/O-only devices whose port
+    /// ranges never overlap (e.g. a POST diagnostic port and a separate
+    /// board-specific register block), and a second slot is simpler than
+    /// generalizing `CustomIo` to N.
+    CustomIo2,
     /// A single caller-supplied device that also needs DMA and interrupt
     /// service outside the CPU-driven read/write path -- see
     /// `DmaCapableIoDevice` and `BusInterface::service_custom_dma_io`.
@@ -612,6 +619,7 @@ pub struct BusInterface {
     custom_video: Option<Box<dyn CustomVideoDevice>>,
     custom_video_2: Option<Box<dyn CustomVideoDevice>>,
     custom_io: Option<Box<dyn IoDevice>>,
+    custom_io_2: Option<Box<dyn IoDevice>>,
     custom_memory: Option<Box<dyn CustomMemoryDevice>>,
     custom_memory_2: Option<Box<dyn CustomMemoryDevice>>,
     custom_dma_io: Option<Box<dyn DmaCapableIoDevice>>,
@@ -710,6 +718,7 @@ impl Default for BusInterface {
             custom_video: None,
             custom_video_2: None,
             custom_io: None,
+            custom_io_2: None,
             custom_memory: None,
             custom_memory_2: None,
             custom_dma_io: None,
@@ -886,6 +895,29 @@ impl BusInterface {
     pub fn install_custom_io_device(&mut self, device: Box<dyn IoDevice>) {
         add_io_device!(self, device, IoDeviceType::CustomIo);
         self.custom_io = Some(device);
+    }
+
+    /// The installed [`IoDevice`] from [`BusInterface::install_custom_io_device`], if any.
+    pub fn custom_io_mut(&mut self) -> Option<&mut dyn IoDevice> {
+        match self.custom_io {
+            Some(ref mut device) => Some(&mut **device),
+            None => None,
+        }
+    }
+
+    /// Install the second, independent [`IoDevice`] slot -- see
+    /// `IoDeviceType::CustomIo2`'s docs for why this exists.
+    pub fn install_custom_io_device_2(&mut self, device: Box<dyn IoDevice>) {
+        add_io_device!(self, device, IoDeviceType::CustomIo2);
+        self.custom_io_2 = Some(device);
+    }
+
+    /// The installed [`IoDevice`] from [`BusInterface::install_custom_io_device_2`], if any.
+    pub fn custom_io_2_mut(&mut self) -> Option<&mut dyn IoDevice> {
+        match self.custom_io_2 {
+            Some(ref mut device) => Some(&mut **device),
+            None => None,
+        }
     }
 
     /// Install the single caller-supplied [`CustomMemoryDevice`].
